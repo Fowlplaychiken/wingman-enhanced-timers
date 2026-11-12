@@ -6,11 +6,14 @@ A Wingman AI custom skill that replaces the stock Timer with one that:
 - **Never fires missed timers silently.** Timers that came due while Wingman was closed are announced
   aloud, listed in status, and not run. Say "run missed timer" or cancel them.
 - **Accepts clock times**: "remind me at 8 PM" (`at_time`: `20:00`, `8:00 PM` or ISO 8601, local time;
-  already passed today means tomorrow; the resolved time is repeated back).
+  also `noon` and `midnight`; already passed today means tomorrow; the resolved time is repeated back).
 - **Asks before sending game input.** A due tool whose name contains a word from `confirm_before_tools`
   (default `key, press, hold, execute_keyboard, send_input`), or a stored request when
   `confirm_prompt_actions` is on, says "Timer X wants to ... Say confirm timer to do it." and waits.
   Nothing runs without the yes; after `confirm_window_seconds` (60) it is skipped and reported.
+
+- **Refuses duplicates.** An identical pending timer (same action, within a minute) is not added twice;
+  the reply names the existing one.
 
 Three action kinds: reminder (`remind_me`, speaks a message), tool (any Wingman tool or command), and
 prompt (`prompt` with `{"request": ...}`).
