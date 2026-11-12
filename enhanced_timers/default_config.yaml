@@ -1,0 +1,51 @@
+module: enhanced_timers.main
+name: EnhancedTimers
+api_version: 3
+version: 0.1.0
+display_name: Enhanced Timers
+author: Star Citizen Computer project
+description:
+  en: Timers that survive a Wingman restart, accept clock times like "at 8 PM", and ask before pressing keys. Replaces the stock Timer skill; do not enable both.
+tags:
+- Utility
+- Timer
+discovery_keywords:
+- timer
+- remind me
+- alarm
+- at 8 PM
+- run missed timer
+- confirm timer
+discoverable_by_default: true
+auto_activate: false
+custom_properties:
+- id: storage_path
+  name: Timer file (optional)
+  hint: Leave empty to keep timers.json in Wingman's generated files folder for this skill.
+  property_type: string
+  value: ''
+  required: false
+- id: confirm_before_tools
+  name: Ask before running tools containing (comma separated)
+  hint: A due timer whose tool name contains any of these words waits for you to say "confirm timer". Case is ignored.
+  property_type: string
+  value: key,press,hold,execute_keyboard,send_input
+  required: false
+- id: confirm_prompt_actions
+  name: Ask before running stored requests
+  hint: Timers that run a stored request as an assistant turn ask first.
+  property_type: boolean
+  value: true
+  required: false
+- id: confirm_window_seconds
+  name: Confirm window (seconds)
+  hint: An unconfirmed timer is skipped and reported after this long.
+  property_type: number
+  value: 60
+  required: false
+- id: poll_seconds
+  name: Check interval (seconds)
+  hint: How often due timers are looked for.
+  property_type: number
+  value: 2
+  required: false
