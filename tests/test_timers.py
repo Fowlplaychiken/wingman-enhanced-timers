@@ -197,3 +197,20 @@ def test_corrupt_file_kept_as_bad_and_start_continues(tmp_path):
         await s.set_timer("remind_me", '{"message": "ok"}', delay=5)
         assert len(s.timers) == 1 and os.path.exists(tmp_path / "t.json")
     run(go())
+
+
+def test_identical_timer_refused_but_different_one_allowed(tmp_path):
+    async def go():
+        c = [T0]; s = make(tmp_path, c)
+        await s.set_timer("remind_me", '{"message": "tea"}', delay=300)
+        dup = await s.set_timer("remind_me", '{"message": "tea"}', delay=300)
+        other = await s.set_timer("remind_me", '{"message": "bread"}', delay=300)
+        assert dup.startswith("Error: an identical timer") and len(s.timers) == 2
+        assert other.startswith("Timer set")
+    run(go())
+
+
+def test_noon_and_midnight_words():
+    now = datetime(2026, 11, 12, 13, 0).astimezone()
+    assert parse_at_time("noon", now).hour == 12 and parse_at_time("noon", now).day == 13
+    assert parse_at_time("Midnight", now).hour == 0 and parse_at_time("midnight", now).day == 13

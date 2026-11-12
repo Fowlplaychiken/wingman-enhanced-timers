@@ -32,6 +32,7 @@ def parse_at_time(text: str, now: datetime) -> datetime:
     if not raw:
         raise ValueError("empty time")
     tz = now.tzinfo
+    raw = {"NOON": "12:00", "MIDNIGHT": "00:00"}.get(raw.upper(), raw)
     for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p", "%I %p", "%I%p"):
         try:
             t = datetime.strptime(raw.upper().replace(".", ""), fmt).time()
@@ -262,6 +263,11 @@ class EnhancedTimers(Skill):
             interval = max(1, int(delay))
             due = now + interval
             spoken = f"Set for {interval} seconds from now."
+        for other in self.timers.values():
+            if (other["state"] == "pending" and other["action"] == action
+                    and other["is_loop"] == bool(is_loop) and abs(other["due"] - due) < 60):
+                return (f"Error: an identical timer is already set for {self._plain(other['due'])} "
+                        f"(id {other['id']}). Cancel it first if you want a new one.")
         timer = {"id": self._new_id(), "due": due, "interval": interval, "is_loop": bool(is_loop),
                  "loops": int(loop_counts), "silent": bool(silent), "action": action,
                  "created": now, "state": "pending"}
