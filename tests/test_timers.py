@@ -42,7 +42,7 @@ class Fake:
         self.tools = SimpleNamespace(has=lambda n: True, invoke=self._invoke)
         self.commands = SimpleNamespace(get=lambda n: None)
         self.tts = SimpleNamespace(speak=self._speak)
-        self.conversation = SimpleNamespace(add_assistant=self._noop)
+        self.conversation = SimpleNamespace(add_assistant=self._noop, user_busy=False)
         self.ai = SimpleNamespace(generate=self._noop)
         self.language = SimpleNamespace(name="English")
 
@@ -189,6 +189,8 @@ def test_prompt_asks_first_then_submits_one_full_turn(tmp_path, core_api):
         assert "confirm timer" in s.wingman.spoken[-1]
         assert core_api["calls"] == []
         await s.confirm_timer()
+        assert core_api["calls"] == []
+        await s.tick()
         assert s.wingman.spoken[-1].startswith("Stored request submitted")
         posts = [r for r in core_api["calls"] if r.method == "POST"]
         assert len(posts) == 1
@@ -430,7 +432,7 @@ def test_prompt_timeout_is_unknown_and_never_retried(tmp_path, core_api):
         core_api["timeout"] = True
         c = [T0]; s = make(tmp_path, c)
         await s.set_timer("prompt", '{"request":"check fuel"}', delay=5)
-        c[0] += 5; await s.tick(); await s.confirm_timer()
+        c[0] += 5; await s.tick(); await s.confirm_timer(); await s.tick()
         assert "outcome is unknown" in s.wingman.spoken[-1]
         c[0] += 100; await s.tick(); await s.confirm_timer()
         assert len([r for r in core_api["calls"] if r.method == "POST"]) == 1
@@ -526,4 +528,77 @@ def test_user_triggered_timer_speech_uses_answer_default_and_worker_uses_event(t
         await s.set_timer("remind_me", '{"message":"autonomous"}', delay=5)
         c[0] += 5; await s.tick()
         assert priorities[-1] is not None  # request context reset after both endpoints
+    run(go())
+
+
+def test_confirmed_prompt_waits_for_confirmation_turn_to_finish(tmp_path, core_api):
+    async def go():
+        c = [T0]; s = make(tmp_path, c)
+        await s.set_timer("prompt", '{"request":"check fuel"}', delay=5)
+        c[0] += 5; await s.tick()
+        s.wingman.conversation.user_busy = True
+        assert "queued" in await s.confirm_timer()
+        assert next(iter(s.timers.values()))["state"] == "confirmed"
+        await s.tick()
+        assert core_api["calls"] == []
+        s.wingman.conversation.user_busy = False
+        await s.tick(); await s.tick()
+        assert len([r for r in core_api["calls"] if r.method == "POST"]) == 1
+    run(go())
+
+
+def test_cancelled_queued_prompt_never_submits(tmp_path, core_api):
+    async def go():
+        c = [T0]; s = make(tmp_path, c)
+        await s.set_timer("prompt", '{"request":"check fuel"}', delay=5)
+        c[0] += 5; await s.tick()
+        s.wingman.conversation.user_busy = True
+        await s.confirm_timer()
+        await s.cancel_timer(next(iter(s.timers)))
+        s.wingman.conversation.user_busy = False
+        await s.tick()
+        assert core_api["calls"] == []
+    run(go())
+
+
+def test_restart_holds_confirmed_prompt_as_missed(tmp_path, core_api):
+    async def go():
+        c = [T0]; s = make(tmp_path, c)
+        await s.set_timer("prompt", '{"request":"check fuel"}', delay=5)
+        c[0] += 5; await s.tick()
+        s.wingman.conversation.user_busy = True
+        await s.confirm_timer()
+        restored = make(tmp_path, c)
+        await restored.load_and_announce(); await restored.tick()
+        assert next(iter(restored.timers.values()))["state"] == "missed"
+        assert core_api["calls"] == []
+    run(go())
+
+
+def test_queued_prompt_expires_without_submitting(tmp_path, core_api):
+    async def go():
+        c = [T0]; s = make(tmp_path, c)
+        await s.set_timer("prompt", '{"request":"check fuel"}', delay=5)
+        c[0] += 5; await s.tick()
+        s.wingman.conversation.user_busy = True
+        await s.confirm_timer()
+        c[0] += 61; await s.tick()
+        s.wingman.conversation.user_busy = False
+        await s.tick()
+        assert s.timers == {} and core_api["calls"] == []
+    run(go())
+
+
+def test_running_missed_prompt_also_waits_for_user_turn(tmp_path, core_api):
+    async def go():
+        c = [T0]; s = make(tmp_path, c)
+        await s.set_timer("prompt", '{"request":"check fuel"}', delay=5)
+        c[0] += 10; await s.load_and_announce()
+        s.wingman.conversation.user_busy = True
+        assert "queued" in await s.run_missed_timer(next(iter(s.timers)))
+        await s.tick()
+        assert core_api["calls"] == []
+        s.wingman.conversation.user_busy = False
+        await s.tick()
+        assert len([r for r in core_api["calls"] if r.method == "POST"]) == 1
     run(go())

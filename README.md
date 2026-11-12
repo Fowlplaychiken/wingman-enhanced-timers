@@ -10,7 +10,7 @@ Voice alarms, reminders and scheduled assistant requests for Wingman AI. Timers 
 - “In five minutes, check my quantum fuel and tell me.”
 - “List my timers.” / “Cancel the refinery timer.”
 
-A reminder speaks directly. A scheduled assistant request asks for confirmation when due, then submits the request to your usual Wingman. That assistant uses its normal model, tools and action controls. Submission does not mean its task succeeded.
+A reminder speaks directly. A scheduled assistant request asks for confirmation when due, then waits for Wingman to finish the current answer before submitting the request. That assistant uses its normal model, tools and action controls. Submission does not mean its task succeeded.
 
 Timers missed while Wingman was closed are announced and listed; they never run silently on startup. Ask to run or cancel one.
 
@@ -29,6 +29,8 @@ Existing stock timers cannot be imported because stock Wingman holds them only i
 
 Reminders run when due. Commands that contain input, unfamiliar action tools and stored requests ask you to say **“confirm timer”** first. If several await confirmation, name the timer. The confirmation window defaults to 60 seconds; queued speech can reduce the time available, so ask for timer status if unsure. Unconfirmed timers are skipped and reported.
 
+A confirmed stored request waits in a short queue while Wingman is answering. The existing confirmation window also covers that wait. You can cancel the queued request; if the window expires, it is skipped and reported. After a restart, it stays on hold until you ask to run it again.
+
 A cancelled timer cannot be started from a stale worker snapshot. An action that has already begun may have an uncertain outcome; the skill does not automatically repeat it. A scheduled tool cannot confirm another timer or run a missed timer on your behalf.
 
 Turn on **Dry run actions** to check a timer before letting it act. Set a short action or request timer, confirm it when asked, then say “show my dry-run log” to see what would have happened. Stored requests and actions requiring confirmation are recorded instead of run. Reminders and reviewed read-only tools still run.
@@ -43,7 +45,11 @@ flowchart TD
     Ask -- Not confirmed --> Skip[Skip and report]
     Need -- No --> Dry
     Dry -- Yes --> Record[Record what would happen]
-    Dry -- No --> Run[Run action or submit request]
+    Dry -- No --> Request{Stored request?}
+    Request -- No --> Run[Run action or submit request]
+    Request -- Yes --> Wait[Wait for current answer to finish]
+    Wait -- Ready in time --> Run
+    Wait -- Confirmation expires --> Skip
     Missed[Timer missed while closed] --> Hold[Announce and keep on hold]
     Hold -- You ask to run it --> Dry
     Hold -- You cancel it --> Remove[Remove timer]
@@ -67,7 +73,7 @@ Clock times use your PC's local timezone. “Noon” and “midnight” work. A 
 
 ## Diagnostics and limits
 
-Ask to list timers to see pending, missed and awaiting-confirmation states. Errors go to Wingman's skill log. Corrupt or unsupported timer data is retained as a `.bad` file and reported; no actions are inferred from it. Scheduled requests use the original local Core API, check the active profile, and are submitted once. A timeout after submission is reported as unknown and is not retried.
+Ask to list timers to see pending, missed, awaiting-confirmation and confirmed-but-waiting states. Errors go to Wingman's skill log. Corrupt or unsupported timer data is retained as a `.bad` file and reported; no actions are inferred from it. Scheduled requests use the original local Core API, check the active profile, and are submitted once. A timeout after submission is reported as unknown and is not retried.
 
 Offline tests cover persistence, cancellation, confirmation, dry runs, worker shutdown and local API submission. Native installation/restart and actual assistant completion are separate checks; source tests do not prove game behavior.
 

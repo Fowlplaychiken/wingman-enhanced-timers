@@ -164,14 +164,17 @@ class EnhancedTimers(Skill):
             return False
         a = t.get("action")
         return (isinstance(t.get("id"), str) and bool(t["id"])
-                and t.get("state") in {"pending", "missed", "awaiting"}
+                and t.get("state") in {"pending", "missed", "awaiting", "confirmed"}
                 and all(type(t.get(k)) in (int, float) and math.isfinite(t[k]) for k in ("due", "interval"))
                 and t["interval"] > 0
                 and type(t.get("is_loop")) is bool and type(t.get("silent")) is bool
                 and type(t.get("loops")) is int and (t["loops"] == -1 or t["loops"] > 0)
                 and isinstance(a, dict) and a.get("type") in {"reminder", "tool", "prompt"}
                 and isinstance(a.get("name"), str) and bool(a["name"])
-                and a["name"] not in USER_ONLY_TOOLS and isinstance(a.get("args"), dict))
+                and a["name"] not in USER_ONLY_TOOLS and isinstance(a.get("args"), dict)
+                and (t["state"] not in {"awaiting", "confirmed"}
+                     or (type(t.get("deadline")) in (int, float) and math.isfinite(t["deadline"])))
+                and (t["state"] != "confirmed" or a["type"] == "prompt"))
 
     def _load(self) -> str | None:
         """Load the file. Returns a notice to speak if it was unreadable."""
@@ -201,7 +204,7 @@ class EnhancedTimers(Skill):
         now = self.clock()
         missed = []
         for t in self.timers.values():
-            if t["state"] == "awaiting" or (t["state"] == "pending" and t["due"] <= now):
+            if t["state"] in {"awaiting", "confirmed"} or (t["state"] == "pending" and t["due"] <= now):
                 t["state"] = "missed"
             if t["state"] == "missed" and not t.get("announced"):
                 t["announced"] = True
@@ -357,7 +360,7 @@ class EnhancedTimers(Skill):
             self._save()
         return f"Timer set with id {timer['id']}. {spoken}\n\n{await self.get_timer_status()}"
 
-    @tool(description="Get a list of all timers: pending, missed while closed, and awaiting confirmation. Keep IDs to yourself.")
+    @tool(description="List timers: pending, missed, awaiting confirmation, or confirmed and waiting for Wingman to finish answering. Keep IDs to yourself.")
     async def get_timer_status(self) -> list[dict]:
         """List timers with plain local times."""
         now = self.clock()
@@ -375,10 +378,12 @@ class EnhancedTimers(Skill):
                 row["was_due"] = self._plain(t["due"])
             elif t["state"] == "awaiting":
                 row["waiting_for"] = "the player to say confirm timer"
+            elif t["state"] == "confirmed":
+                row["waiting_for"] = "Wingman to finish answering before submitting the request"
             out.append(row)
         return out
 
-    @tool(description="Cancel a timer (pending, missed or awaiting) by its id.")
+    @tool(description="Cancel a pending, missed, awaiting or queued timer by its id.")
     async def cancel_timer(self, id: str) -> str:
         """
         Args:
@@ -448,9 +453,15 @@ class EnhancedTimers(Skill):
         Args:
             id: The id of the missed timer.
         """
-        t = self.timers.get(id) if id else None
-        if not t or t["state"] != "missed":
-            return f"No missed timer with id '{str(id)}'."
+        with self._lock:
+            t = self.timers.get(id) if id else None
+            if not t or t["state"] != "missed":
+                return f"No missed timer with id '{str(id)}'."
+            if t["action"]["type"] == "prompt" and not self._prop("dry_run_key_presses", False):
+                t["state"] = "confirmed"
+                t["deadline"] = self.clock() + max(1, float(self._prop("confirm_window_seconds", 60)))
+                self._save()
+                return "Missed request queued until Wingman finishes answering; you can still cancel it."
         token = self._user_response.set(True)
         try:
             executed = await self._execute(t, self.clock())
@@ -471,6 +482,10 @@ class EnhancedTimers(Skill):
             if not t or t["state"] != "awaiting":
                 return "No timer is waiting for confirmation."
             expired = now >= t["deadline"]
+            if not expired and t["action"]["type"] == "prompt" and not self._prop("dry_run_key_presses", False):
+                t["state"] = "confirmed"
+                self._save()
+                return "Stored request confirmed and queued until Wingman finishes answering; you can still cancel it."
         token = self._user_response.set(True)
         try:
             if expired:
@@ -498,9 +513,19 @@ class EnhancedTimers(Skill):
                         t["deadline"] = now + max(1, float(self._prop("confirm_window_seconds", 60)))
                         self._save()
                         announce = True
+                    elif t["action"]["type"] == "prompt":
+                        t["state"] = "confirmed"
+                        t["deadline"] = now + max(1, float(self._prop("confirm_window_seconds", 60)))
+                        self._save()
+                        if getattr(self.wingman.conversation, "user_busy", True):
+                            continue
                     operation = "execute"
-                elif t["state"] == "awaiting" and now >= t["deadline"]:
+                elif t["state"] in {"awaiting", "confirmed"} and now >= t["deadline"]:
                     operation = "skip"
+                elif t["state"] == "confirmed":
+                    if getattr(self.wingman.conversation, "user_busy", True):
+                        continue
+                    operation = "execute"
                 else:
                     continue
             if announce:
@@ -525,16 +550,19 @@ class EnhancedTimers(Skill):
 
     async def _skip(self, t: dict, now: float) -> None:
         with self._lock:
-            if self.timers.get(t["id"]) is not t or t["state"] != "awaiting" or now < t["deadline"]:
+            if self.timers.get(t["id"]) is not t or t["state"] not in {"awaiting", "confirmed"} or now < t["deadline"]:
                 return
+            reason = "could not start before its confirmation expired" if t["state"] == "confirmed" else "was not confirmed"
             self._advance(t, now)
-        await self._say(f"Timer {self._label(t)} was not confirmed and was skipped.")
+        await self._say(f"Timer {self._label(t)} {reason} and was skipped.")
 
     async def _execute(self, t: dict, now: float) -> bool:
         # Advance first so a failing action can never re-fire every tick.
         with self._lock:
             if (self._stopping or self.timers.get(t["id"]) is not t
-                    or (t["state"] == "pending" and t["due"] > now)):
+                    or (t["state"] == "pending" and t["due"] > now)
+                    or (t["state"] == "confirmed" and (now >= t["deadline"]
+                        or getattr(self.wingman.conversation, "user_busy", True)))):
                 return False
             a = dict(t["action"])
             silent = t["silent"]
