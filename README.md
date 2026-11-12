@@ -1,72 +1,92 @@
 # Wingman Enhanced Timers
 
-A Wingman AI custom skill that replaces the stock Timer with one that:
+Voice alarms, reminders and scheduled assistant requests for Wingman AI. Timers survive a Wingman restart. No Wingman Core changes or separate service.
 
-- **Remembers timers** across a Wingman restart (saved to `timers.json`, atomic writes).
-- **Never fires missed timers silently.** Timers that came due while Wingman was closed are announced
-  aloud, listed in status, and not run. Say "run missed timer" or cancel them.
-- **Accepts clock times**: "remind me at 8 PM" (`at_time`: `20:00`, `8:00 PM` or ISO 8601, local time;
-  also `noon` and `midnight`; already passed today means tomorrow; the resolved time is repeated back).
-- **Asks before sending game input.** A due tool whose name contains a word from `confirm_before_tools`
-  (default `key, press, hold, execute_keyboard, send_input`), or a stored request when
-  `confirm_prompt_actions` is on, says "Timer X wants to ... Say confirm timer to do it." and waits.
-  Nothing runs without the yes; after `confirm_window_seconds` (60) it is skipped and reported.
+## What you can say
 
-- **Refuses duplicates.** An identical pending timer (same action, within a minute) is not added twice;
-  the reply names the existing one.
+- “In ten minutes, remind me to check the refinery.”
+- “At 8 PM, remind me to leave.”
+- “Every fifteen minutes, remind me to check my fuel.”
+- “In five minutes, check my quantum fuel and tell me.”
+- “List my timers.” / “Cancel the refinery timer.”
 
-Three action kinds: reminder (`remind_me`, speaks a message), tool (any Wingman tool or command), and
-prompt (`prompt` with `{"request": ...}`).
+A reminder speaks directly. A scheduled assistant request asks for confirmation when due, then waits for Wingman to finish the current answer before submitting the request. That assistant uses its normal model, tools and action controls. Submission does not mean its task succeeded.
 
-## Dry run (video tests only)
+Timers missed while Wingman was closed are announced and listed; they never run silently on startup. Ask to run or cancel one.
 
-Set the custom property `dry_run_key_presses` to true. A due timer whose tool matches
-`confirm_before_tools` still asks for "confirm timer", but when it would execute, nothing is pressed. The
-timer id, tool, arguments, due time, actual time and reason `dry_run_not_sent` go to an in-memory log
-(read it with `get_dry_run_log`) and the skill says "Dry run: would have pressed ...". A loop re-arms
-as usual, a one-shot finishes without having run. Stored-request (prompt) timers are unchanged.
+## Install
 
-## Install (Wingman AI on Windows)
+Requires Wingman AI 3.2.14 or later and its public v3 skills API. Wingman already supplies the `httpx` dependency used for its local API.
 
-1. Close Wingman AI.
-2. Copy the `enhanced_timers` folder into `%APPDATA%\ShipBit\WingmanAI\custom_skills\`.
-3. Start Wingman, open your wingman's skills, **disable the stock Timer** and enable **Enhanced Timers**.
-   Do not enable both: they share tool names (`set_timer`, `cancel_timer`, ...) and would disagree.
+1. Download the skill ZIP from [Releases](https://github.com/Fowlplaychiken/wingman-enhanced-timers/releases).
+2. Fully quit Wingman. Extract the `enhanced_timers` folder into `%APPDATA%\ShipBit\WingmanAI\custom_skills`.
+3. Reopen Wingman. For your chosen assistant, disable the stock **Timer** and enable **Enhanced Timers**. Use only one: they share timer tool names.
+4. Try a short reminder, then ask to list your timers.
 
-## Tools
+Existing stock timers cannot be imported because stock Wingman holds them only in memory. Finish or cancel those before switching. Keep the prior skill version for rollback.
 
-`set_timer` (function_name, function_arguments_json, delay or at_time, is_loop, loop_counts, silent),
-`get_timer_status`, `cancel_timer`, `change_timer_settings`, `remind_me`, `run_missed_timer`, `confirm_timer`, `get_dry_run_log`.
-Argument names match the stock skill; `delay` is now optional and `at_time` added.
+## When a timer acts
 
-## Safety rule
+Reminders run when due. Commands that contain input, unfamiliar action tools and stored requests ask you to say **“confirm timer”** first. If several await confirmation, name the timer. The confirmation window defaults to 60 seconds; queued speech can reduce the time available, so ask for timer status if unsure. Unconfirmed timers are skipped and reported.
 
-No key press or stored request runs from a timer without an explicit "confirm timer". "Run missed timer"
-counts as the player's explicit request for that one timer.
+A confirmed stored request waits in a short queue while Wingman is answering. The existing confirmation window also covers that wait. You can cancel the queued request; if the window expires, it is skipped and reported. After a restart, it stays on hold until you ask to run it again.
 
-## Develop / test
+A cancelled timer cannot be started from a stale worker snapshot. An action that has already begun may have an uncertain outcome; the skill does not automatically repeat it. A scheduled tool cannot confirm another timer or run a missed timer on your behalf.
 
+Turn on **Dry run actions** to check a timer before letting it act. Set a short action or request timer, confirm it when asked, then say “show my dry-run log” to see what would have happened. Stored requests and actions requiring confirmation are recorded instead of run. Reminders and reviewed read-only tools still run.
+
+```mermaid
+flowchart TD
+    Due[Timer becomes due] --> Kind{Reminder?}
+    Kind -- Yes --> Speak[Speak reminder]
+    Kind -- Action or request --> Need{Confirmation needed?}
+    Need -- Yes --> Ask[Ask you to confirm]
+    Ask -- Confirmed --> Dry{Dry run applies?}
+    Ask -- Not confirmed --> Skip[Skip and report]
+    Need -- No --> Dry
+    Dry -- Yes --> Record[Record what would happen]
+    Dry -- No --> Request{Stored request?}
+    Request -- No --> Run[Run action or submit request]
+    Request -- Yes --> Wait[Wait for current answer to finish]
+    Wait -- Ready in time --> Run
+    Wait -- Confirmation expires --> Skip
+    Missed[Timer missed while closed] --> Hold[Announce and keep on hold]
+    Hold -- You ask to run it --> Dry
+    Hold -- You cancel it --> Remove[Remove timer]
 ```
-pip install pytest ruff
+
+## Settings
+
+| Setting | Default | Use |
+|---|---|---|
+| Timer file | automatic | Private JSON file scoped to your assistant name; optional explicit path. Keep private: it contains reminder/request text. |
+| Tools allowed without confirmation | `get_weather` | Exact reviewed tool names. Unknown tools ask first. Input commands still ask. |
+| Ask before stored requests | on | Confirmation before submitting a full assistant turn. |
+| Core API port | `49111` | Change only if your Wingman uses another local port. Fixed loopback only; no external server. |
+| Confirm window | 60 seconds | Time to confirm a due action. |
+| Check interval | 2 seconds | How often timers are checked. |
+| Dry run actions | off | Record stored requests and actions requiring confirmation instead of running them. |
+
+Different assistant names get separate saved files. If you use the same assistant name in multiple profiles, set a distinct **Timer file** for each; the public skill API does not expose profile identity. The old unscoped `timers.json` is kept untouched; choose it explicitly only if you intend to reuse it.
+
+Clock times use your PC's local timezone. “Noon” and “midnight” work. A clock time already passed today means tomorrow; an explicit past date is refused. The resolved time is repeated back. Repeating clock-time alarms use 24 hours; change_timer_settings can change that interval. They may drift with execution latency; daylight-saving/calendar recurrence is not implemented.
+
+## Diagnostics and limits
+
+Ask to list timers to see pending, missed, awaiting-confirmation and confirmed-but-waiting states. Errors go to Wingman's skill log. Corrupt or unsupported timer data is retained as a `.bad` file and reported; no actions are inferred from it. Scheduled requests use the original local Core API, check the active profile, and are submitted once. A timeout after submission is reported as unknown and is not retried.
+
+40 offline tests cover persistence, cancellation, confirmation, dry runs, worker shutdown and local API submission. Installation in Wingman, a spoken reminder and a confirmed scheduled assistant reply have been verified. A saved reminder also survived reloading the assistant profile and fired without another timer request. A full Wingman process restart, voice input and gameplay remain unverified.
+
+## Development
+
+Python 3.11 or later. Install test dependencies in your development environment, then run:
+
+```sh
 python -m pytest -q
 ruff check .
+python build.py --out /path/to/new/output-folder
 ```
-Tests stub Wingman's `api.*` and `skills.*` modules, so no Wingman install is needed.
 
-## Known gaps
+The deterministic ZIP contains only this skill, its README/license and a hash manifest. It contains no user timers, credentials, recordings, models or other project code. Tests mock Wingman and HTTP calls; they do not contact a provider.
 
-- **Prompt timers speak instead of running a full assistant turn.** Wingman has `Wingman.process(transcript=...)`
-  (`wingmen/wingman.py`, upstream main) but the skill facade (`wingmen/facade.py`) does not expose it. The
-  skill uses it automatically if a future version exposes it as `self.wingman.process`; the gap is recorded in `skill.gaps`.
-- Untested inside a real Wingman install (only against stubs). The `@tool` schema generation, `prepare()`
-  worker thread and `get_generated_files_dir()` path are copied from upstream usage, not run.
-- Loop timers keep drifting from their original time by execution latency (same as stock).
-- A timer's repeat after a clock-time `at_time` loop repeats every 24 h unless `delay` is also given.
-
-## Starbuck refine next
-
-1. Install on Nick's Wingman, check `@tool` schema accepts `Optional` args and `function_arguments_json` default.
-2. Confirm the stock Timer can be disabled cleanly and the generated-files path persists across updates.
-3. Decide whether the stock "summary" speech via `ai.generate` is wanted for tool timers.
-4. Replace the prompt-action fallback once a full-turn API is available.
-5. Add an in-game test of the confirm flow with a real key tool, with the player present.
+Based on the stock [Wingman Timer](https://github.com/ShipBit/wingman-ai/tree/main/skills/timer), under MIT. This optional module is independently maintained and does not modify Wingman Core.

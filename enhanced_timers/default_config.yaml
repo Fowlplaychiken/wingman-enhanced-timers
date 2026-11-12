@@ -1,7 +1,7 @@
-module: enhanced_timers.main
+module: skills.enhanced_timers.main
 name: EnhancedTimers
 api_version: 3
-version: 0.1.1
+version: 0.1.2
 display_name: Enhanced Timers
 author: Star Citizen Computer project
 description:
@@ -17,25 +17,37 @@ discovery_keywords:
 - run missed timer
 - confirm timer
 discoverable_by_default: true
-auto_activate: false
+auto_activate: true
 custom_properties:
 - id: storage_path
   name: Timer file (optional)
-  hint: Leave empty to keep timers.json in Wingman's generated files folder for this skill.
+  hint: Leave empty for a file scoped to this Wingman name in the skill's generated files folder. Use distinct explicit paths for same-named Wingmen in different profiles. Legacy timers.json is preserved and never auto-imported.
   property_type: string
   value: ''
   required: false
 - id: confirm_before_tools
-  name: Ask before running tools containing (comma separated)
-  hint: A due timer whose tool name contains any of these words waits for you to say "confirm timer". Case is ignored.
+  name: Always confirm tool names containing (comma separated)
+  hint: These matches always require confirmation. Commands with input or skill actions and tools outside the safe list also require confirmation.
   property_type: string
   value: key,press,hold,execute_keyboard,send_input
+  required: false
+- id: unconfirmed_tools
+  name: Reviewed tools allowed without confirmation
+  hint: Exact comma-separated tool names with harmless read-only effects. Other tools require confirmation. Input commands always require confirmation.
+  property_type: string
+  value: get_weather
   required: false
 - id: confirm_prompt_actions
   name: Ask before running stored requests
   hint: Timers that run a stored request as an assistant turn ask first.
   property_type: boolean
   value: true
+  required: false
+- id: core_api_port
+  name: Wingman Core API port
+  hint: Loopback-only Core API used to submit confirmed stored requests as normal assistant turns. No retries after an uncertain submission.
+  property_type: number
+  value: 49111
   required: false
 - id: confirm_window_seconds
   name: Confirm window (seconds)
@@ -50,8 +62,8 @@ custom_properties:
   value: 2
   required: false
 - id: dry_run_key_presses
-  name: Dry run key presses (video tests only)
-  hint: For video tests only. Key-press timers (tools matching the ask-before list) are logged and announced but never pressed. Read the log with get_dry_run_log.
+  name: Dry run actions
+  hint: Check timers by recording stored requests and actions requiring confirmation instead of running them. Reminders and reviewed read-only tools still run. Ask to see the dry-run log.
   property_type: boolean
   value: false
   required: false
