@@ -214,3 +214,64 @@ def test_noon_and_midnight_words():
     now = datetime(2026, 11, 12, 13, 0).astimezone()
     assert parse_at_time("noon", now).hour == 12 and parse_at_time("noon", now).day == 13
     assert parse_at_time("Midnight", now).hour == 0 and parse_at_time("midnight", now).day == 13
+
+
+
+def test_dry_run_logs_key_press_and_never_executes(tmp_path):
+    async def go():
+        c = [T0]; s = make(tmp_path, c, dry_run_key_presses=True)
+        await s.set_timer("press_key", '{"key": "g"}', delay=5)
+        c[0] += 5; await s.tick()
+        assert s.wingman.invoked == []
+        c[0] += 2; await s.confirm_timer()
+        assert s.wingman.invoked == []
+        log = await s.get_dry_run_log()
+        assert len(log) == 1
+        e = log[0]
+        assert (e["tool"], e["arguments"], e["due"], e["actual"], e["reason"]) == (
+            "press_key", {"key": "g"}, T0 + 5, T0 + 7, "dry_run_not_sent")
+        assert "Dry run: would have pressed" in s.wingman.spoken[-1]
+        assert s.timers == {}                      # one-shot is done
+    run(go())
+
+
+def test_dry_run_loop_still_rearms(tmp_path):
+    async def go():
+        c = [T0]; s = make(tmp_path, c, dry_run_key_presses=True)
+        await s.set_timer("press_key", "{}", delay=5, is_loop=True, loop_counts=2)
+        c[0] += 5; await s.tick(); await s.confirm_timer()
+        t = next(iter(s.timers.values()))
+        assert t["state"] == "pending" and t["loops"] == 1
+        assert s.wingman.invoked == [] and len(s.dry_run_log) == 1
+    run(go())
+
+
+def test_dry_run_off_executes_after_confirm(tmp_path):
+    async def go():
+        c = [T0]; s = make(tmp_path, c, dry_run_key_presses=False)
+        await s.set_timer("press_key", '{"key": "g"}', delay=5)
+        c[0] += 5; await s.tick()
+        assert s.wingman.invoked == []
+        await s.confirm_timer()
+        assert s.wingman.invoked == [("press_key", {"key": "g"})]
+        assert await s.get_dry_run_log() == []
+    run(go())
+
+
+def test_dry_run_does_not_affect_prompt_timers(tmp_path):
+    async def go():
+        c = [T0]; s = make(tmp_path, c, dry_run_key_presses=True)
+        await s.set_timer("prompt", '{"request": "check fuel"}', delay=5)
+        c[0] += 5; await s.tick(); await s.confirm_timer()
+        assert s.wingman.spoken[-1] == "Timer reminder: check fuel"
+        assert s.dry_run_log == []
+    run(go())
+
+
+def test_dry_run_leaves_non_key_tools_running(tmp_path):
+    async def go():
+        c = [T0]; s = make(tmp_path, c, dry_run_key_presses=True)
+        await s.set_timer("get_weather", "{}", delay=5, silent=True)
+        c[0] += 5; await s.tick()
+        assert s.wingman.invoked == [("get_weather", {})] and s.dry_run_log == []
+    run(go())

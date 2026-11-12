@@ -60,6 +60,7 @@ class EnhancedTimers(Skill):
         self.active = False
         self.gaps: list[str] = []
         self._announced_load = False
+        self.dry_run_log: list[dict] = []
 
     # ------------------------------------------------------------ config
     def _prop(self, prop_id: str, default):
@@ -339,6 +340,11 @@ class EnhancedTimers(Skill):
         self._save()
         return f"Timer with id '{id}' settings have been changed.\n\n{await self.get_timer_status()}"
 
+    @tool(description="Read the dry-run log: key-press timers that were logged but not pressed (video tests only).")
+    async def get_dry_run_log(self) -> list[dict]:
+        """List key presses that dry run logged instead of sending."""
+        return [dict(e) for e in self.dry_run_log]
+
     @tool(description="Remind the user with a message. Use as 'function_name' in 'set_timer' when the user says 'remind me to...'.")
     async def remind_me(self, message: str) -> str:
         """
@@ -413,8 +419,15 @@ class EnhancedTimers(Skill):
         # Advance first so a failing action can never re-fire every tick.
         a = dict(t["action"])
         silent = t["silent"]
-        self._advance(t, now)
+        due = t["due"]
+        dry = a["type"] == "tool" and bool(self._prop("dry_run_key_presses", False)) and self._needs_confirm(t)
+        self._advance(t, now)  # a dry-run one-shot is finished (not run); a loop re-arms
         try:
+            if dry:
+                self.dry_run_log.append({"timer_id": t["id"], "tool": a["name"], "arguments": a["args"],
+                                         "due": due, "actual": now, "reason": "dry_run_not_sent"})
+                await self._say(f"Dry run: would have pressed {self._label(t)}")
+                return
             if a["type"] == "reminder":
                 msg = a["args"].get("message") or "This is your reminder, no message was given."
                 if not silent:

@@ -1,7 +1,7 @@
 module: enhanced_timers.main
 name: EnhancedTimers
 api_version: 3
-version: 0.1.0
+version: 0.1.1
 display_name: Enhanced Timers
 author: Star Citizen Computer project
 description:
@@ -48,4 +48,10 @@ custom_properties:
   hint: How often due timers are looked for.
   property_type: number
   value: 2
+  required: false
+- id: dry_run_key_presses
+  name: Dry run key presses (video tests only)
+  hint: For video tests only. Key-press timers (tools matching the ask-before list) are logged and announced but never pressed. Read the log with get_dry_run_log.
+  property_type: boolean
+  value: false
   required: false

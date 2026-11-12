@@ -18,6 +18,14 @@ A Wingman AI custom skill that replaces the stock Timer with one that:
 Three action kinds: reminder (`remind_me`, speaks a message), tool (any Wingman tool or command), and
 prompt (`prompt` with `{"request": ...}`).
 
+## Dry run (video tests only)
+
+Set the custom property `dry_run_key_presses` to true. A due timer whose tool matches
+`confirm_before_tools` still asks for "confirm timer", but when it would execute, nothing is pressed. The
+timer id, tool, arguments, due time, actual time and reason `dry_run_not_sent` go to an in-memory log
+(read it with `get_dry_run_log`) and the skill says "Dry run: would have pressed ...". A loop re-arms
+as usual, a one-shot finishes without having run. Stored-request (prompt) timers are unchanged.
+
 ## Install (Wingman AI on Windows)
 
 1. Close Wingman AI.
@@ -28,7 +36,7 @@ prompt (`prompt` with `{"request": ...}`).
 ## Tools
 
 `set_timer` (function_name, function_arguments_json, delay or at_time, is_loop, loop_counts, silent),
-`get_timer_status`, `cancel_timer`, `change_timer_settings`, `remind_me`, `run_missed_timer`, `confirm_timer`.
+`get_timer_status`, `cancel_timer`, `change_timer_settings`, `remind_me`, `run_missed_timer`, `confirm_timer`, `get_dry_run_log`.
 Argument names match the stock skill; `delay` is now optional and `at_time` added.
 
 ## Safety rule
