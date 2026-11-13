@@ -7,10 +7,17 @@ Voice alarms, reminders and scheduled assistant requests for Wingman AI. Timers 
 - “In ten minutes, remind me to check the refinery.”
 - “At 8 PM, remind me to leave.”
 - “Every fifteen minutes, remind me to check my fuel.”
-- “In five minutes, check my quantum fuel and tell me.”
+- “In five minutes, ask the assistant for a weather report.”
 - “List my timers.” / “Cancel the refinery timer.”
 
 A reminder speaks directly. A scheduled assistant request asks for confirmation when due, then waits for Wingman to finish the current answer before submitting the request. That assistant uses its normal model, tools and action controls. Submission does not mean its task succeeded.
+
+**Works without Wilma or any engineering module.** Reminders, repeating alarms,
+scheduled assistant requests and supported tool calls work with ordinary Wingman.
+Timers provide scheduling, not screen reading or telemetry. For example, “check
+my quantum fuel in five minutes” also needs a tool that can read current fuel.
+Wilma owns visual engineering warnings; scheduling its status tool only reports
+its existing state and does not take a new reading.
 
 Timers missed while Wingman was closed are announced and listed; they never run silently on startup. Ask to run or cancel one.
 
@@ -34,6 +41,9 @@ A confirmed stored request waits in a short queue while Wingman is answering. Th
 A cancelled timer cannot be started from a stale worker snapshot. An action that has already begun may have an uncertain outcome; the skill does not automatically repeat it. A scheduled tool cannot confirm another timer or run a missed timer on your behalf.
 
 Turn on **Dry run actions** to check a timer before letting it act. Set a short action or request timer, confirm it when asked, then say “show my dry-run log” to see what would have happened. Stored requests and actions requiring confirmation are recorded instead of run. Reminders and reviewed read-only tools still run.
+
+Dry run is useful for any scheduled action. Gameplay-video perception tests
+belong to the vision or engineering module, not to this timer skill.
 
 ```mermaid
 flowchart TD
