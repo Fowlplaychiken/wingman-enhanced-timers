@@ -88,7 +88,7 @@ Clock times use your PC's local timezone. “Noon” and “midnight” work. A 
 
 Ask to list timers to see pending, missed, awaiting-confirmation and confirmed-but-waiting states. Errors go to Wingman's skill log. Corrupt or unsupported timer data is retained as a `.bad` file and reported; no actions are inferred from it. Scheduled requests use the original local Core API, check the active profile, and are submitted once. A timeout after submission is reported as unknown and is not retried.
 
-Offline tests cover persistence across separate Python processes, cancellation, confirmation, dry runs, worker shutdown and local API submission. Installation in Wingman, a spoken reminder and a confirmed scheduled assistant reply have been verified. A saved reminder also survived reloading the assistant profile and fired without another timer request. A full Wingman process restart, voice input and gameplay remain unverified.
+Offline tests cover persistence across separate Python processes, cancellation, confirmation, dry runs, worker shutdown and local API submission. In Wingman, a confirmed scheduled assistant request completed. A pending reminder survived a profile reload, and a separate text-created reminder survived a full app restart and fired once when due. Microphone input and gameplay were outside these checks.
 
 ## Development
 
