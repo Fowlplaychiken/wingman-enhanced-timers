@@ -602,3 +602,51 @@ def test_running_missed_prompt_also_waits_for_user_turn(tmp_path, core_api):
         await s.tick()
         assert len([r for r in core_api["calls"] if r.method == "POST"]) == 1
     run(go())
+
+
+def test_saved_reminder_survives_a_fresh_python_process(tmp_path):
+    import subprocess
+    import sys
+
+    script = r"""
+import asyncio
+import runpy
+import sys
+from pathlib import Path
+
+runpy.run_path("tests/conftest.py")
+fixtures = runpy.run_path("tests/test_timers.py")
+folder, phase = Path(sys.argv[1]), sys.argv[2]
+
+async def verify():
+    start = fixtures["T0"]
+    clock = [start + (0 if phase == "save" else 10)]
+    timer = fixtures["make"](folder, clock)
+    if phase == "save":
+        result = await timer.set_timer("remind_me", '{"message":"Check the refinery"}', delay=60)
+        assert result.startswith("Timer set with id ")
+        assert timer.wingman.spoken == []
+        return
+
+    await timer.load_and_announce()
+    assert [row["state"] for row in await timer.get_timer_status()] == ["pending"]
+    assert timer.wingman.spoken == []
+    clock[0] = start + 60
+    await timer.tick()
+    await timer.tick()
+    assert timer.wingman.spoken == ["Check the refinery"]
+    assert timer.wingman.invoked == []
+    assert await timer.get_timer_status() == []
+
+asyncio.run(verify())
+"""
+    root = Path(__file__).resolve().parents[1]
+    for phase in ("save", "resume"):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path), phase],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stderr
