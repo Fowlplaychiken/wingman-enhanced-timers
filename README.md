@@ -7,17 +7,18 @@ Voice alarms, reminders and scheduled assistant requests for Wingman AI. Timers 
 - “In ten minutes, remind me to check the refinery.”
 - “At 8 PM, remind me to leave.”
 - “Every fifteen minutes, remind me to check my fuel.”
-- “In five minutes, ask the assistant for a weather report.”
+- “In five minutes, ask the assistant to give me a one-sentence preflight checklist.”
 - “List my timers.” / “Cancel the refinery timer.”
 
 A reminder speaks directly. A scheduled assistant request asks for confirmation when due, then waits for Wingman to finish the current answer before submitting the request. That assistant uses its normal model, tools and action controls. Submission does not mean its task succeeded.
 
-**Works without Wilma or any engineering module.** Reminders, repeating alarms,
-scheduled assistant requests and supported tool calls work with ordinary Wingman.
-Timers provide scheduling, not screen reading or telemetry. For example, “check
-my quantum fuel in five minutes” also needs a tool that can read current fuel.
-Wilma owns visual engineering warnings; scheduling its status tool only reports
-its existing state and does not take a new reading.
+**Enhanced Timers works with ordinary Wingman.** Reminders, alarms and scheduled
+assistant replies need no other skill.
+
+You can also schedule a tool your assistant already has. With Wailing Wilma
+enabled, try “In five minutes, ask Wilma for her current engineering status.”
+This reports the latest readings Wilma already has. A timed quantum-fuel check
+requires a tool that can read current fuel.
 
 Timers missed while Wingman was closed are announced and listed; they never run silently on startup. Ask to run or cancel one.
 
@@ -42,8 +43,10 @@ A cancelled timer cannot be started from a stale worker snapshot. An action that
 
 Turn on **Dry run actions** to check a timer before letting it act. Set a short action or request timer, confirm it when asked, then say “show my dry-run log” to see what would have happened. Stored requests and actions requiring confirmation are recorded instead of run. Reminders and reviewed read-only tools still run.
 
-Dry run is useful for any scheduled action. Gameplay-video perception tests
-belong to the vision or engineering module, not to this timer skill.
+To test scheduling and confirmation, turn on dry run and schedule the preflight
+checklist above. Confirm when prompted, then ask for the dry-run log. No video
+or game is needed. Testing how an optional skill reads a gameplay video
+requires that skill's own test setup.
 
 ```mermaid
 flowchart TD
@@ -70,7 +73,7 @@ flowchart TD
 | Setting | Default | Use |
 |---|---|---|
 | Timer file | automatic | Private JSON file scoped to your assistant name; optional explicit path. Keep private: it contains reminder/request text. |
-| Tools allowed without confirmation | `get_weather` | Exact reviewed tool names. Unknown tools ask first. Input commands still ask. |
+| Tools allowed without confirmation | See skill settings | Add exact names of harmless read-only tools already available to your assistant. A name in this list does not install a tool. Other tools and input commands ask first. |
 | Ask before stored requests | on | Confirmation before submitting a full assistant turn. |
 | Core API port | `49111` | Change only if your Wingman uses another local port. Fixed loopback only; no external server. |
 | Confirm window | 60 seconds | Time to confirm a due action. |
@@ -85,7 +88,7 @@ Clock times use your PC's local timezone. “Noon” and “midnight” work. A 
 
 Ask to list timers to see pending, missed, awaiting-confirmation and confirmed-but-waiting states. Errors go to Wingman's skill log. Corrupt or unsupported timer data is retained as a `.bad` file and reported; no actions are inferred from it. Scheduled requests use the original local Core API, check the active profile, and are submitted once. A timeout after submission is reported as unknown and is not retried.
 
-40 offline tests cover persistence, cancellation, confirmation, dry runs, worker shutdown and local API submission. Installation in Wingman, a spoken reminder and a confirmed scheduled assistant reply have been verified. A saved reminder also survived reloading the assistant profile and fired without another timer request. A full Wingman process restart, voice input and gameplay remain unverified.
+Offline tests cover persistence across separate Python processes, cancellation, confirmation, dry runs, worker shutdown and local API submission. Installation in Wingman, a spoken reminder and a confirmed scheduled assistant reply have been verified. A saved reminder also survived reloading the assistant profile and fired without another timer request. A full Wingman process restart, voice input and gameplay remain unverified.
 
 ## Development
 
