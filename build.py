@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
+TZDATA_SHA256 = "0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec"
 
 
 def build(destination: Path) -> dict:
@@ -19,12 +20,16 @@ def build(destination: Path) -> dict:
     version = re.search(rb"(?m)^version: ([0-9]+\.[0-9]+\.[0-9]+)\r?$", config)
     if version is None:
         raise ValueError("Explicit skill version required")
+    timezones = (source / "timezones.whl").read_bytes()
+    if hashlib.sha256(timezones).hexdigest() != TZDATA_SHA256:
+        raise ValueError("Bundled tzdata differs from the pinned upstream wheel")
     members = {
         "default_config.yaml": config,
         "main.py": (source / "main.py").read_bytes(),
         "__init__.py": (source / "__init__.py").read_bytes(),
         "README.md": (ROOT / "README.md").read_bytes(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(),
+        "timezones.whl": timezones,
     }
     manifest = {
         "version": version.group(1).decode("ascii"),

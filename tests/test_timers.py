@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -250,6 +250,46 @@ def test_noon_and_midnight_words():
     assert parse_at_time("noon", now).hour == 12 and parse_at_time("noon", now).day == 13
     assert parse_at_time("Midnight", now).hour == 0 and parse_at_time("midnight", now).day == 13
 
+
+def test_current_clock_and_timer_use_requested_timezone(tmp_path):
+    async def go():
+        now = datetime(2026, 11, 14, 2, 0, tzinfo=timezone.utc)
+        clock = [now.timestamp()]
+        s = make(tmp_path, clock)
+        assert (await s.get_current_time())["now"] == now.astimezone().isoformat()
+        pacific = "America/Los_Angeles"
+        assert await s.get_current_time(pacific) == {
+            "now": "2026-11-13T18:00:00-08:00", "time_zone": pacific,
+        }
+        assert "error" in await s.get_current_time("PST")
+        result = await s.set_timer("remind_me", '{"message":"crew"}',
+                                   at_time="8 PM", time_zone=pacific)
+        assert "8:00 PM today (America/Los_Angeles, UTC-0800)" in result
+        assert "get_current_time" in await s.get_prompt()
+        assert (await s.set_timer("remind_me", at_time="2026-11-14T08:00+00:00",
+                                  time_zone=pacific)).startswith("Error")
+        restored = make(tmp_path, clock)
+        await restored.load_and_announce()
+        assert (await restored.get_timer_status())[0]["remaining_time_in_seconds"] == 7200
+        clock[0] += 7200
+        await restored.tick()
+        assert restored.wingman.spoken == ["crew"]
+    run(go())
+
+
+def test_named_zone_clock_change_and_explicit_offset(tmp_path):
+    async def go():
+        s = make(tmp_path, [datetime(2026, 3, 1, tzinfo=timezone.utc).timestamp()])
+        zone = "America/New_York"
+        skipped = await s.set_timer("remind_me", at_time="2026-03-08T02:30", time_zone=zone)
+        repeated = await s.set_timer("remind_me", at_time="2026-11-01T01:30", time_zone=zone)
+        assert "skipped" in skipped and "occurs twice" in repeated and not s.timers
+        result = await s.set_timer("remind_me", at_time="2026-11-01T01:30-05:00", time_zone=zone)
+        assert "UTC-0500" in result
+        assert next(iter(s.timers.values()))["due"] == datetime(
+            2026, 11, 1, 6, 30, tzinfo=timezone.utc,
+        ).timestamp()
+    run(go())
 
 
 def test_dry_run_logs_key_press_and_never_executes(tmp_path):

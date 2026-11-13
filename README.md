@@ -6,6 +6,8 @@ Voice alarms, reminders and scheduled assistant requests for Wingman AI. Timers 
 
 - “In ten minutes, remind me to check the refinery.”
 - “At 8 PM, remind me to leave.”
+- “At 8 PM Pacific time, remind me to join the crew.”
+- “What time is it here?” / “What time is it in Tokyo?”
 - “Every fifteen minutes, remind me to check my fuel.”
 - “In five minutes, ask the assistant to give me a one-sentence preflight checklist.”
 - “List my timers.” / “Cancel the refinery timer.”
@@ -82,7 +84,7 @@ flowchart TD
 
 Different assistant names get separate saved files. If you use the same assistant name in multiple profiles, set a distinct **Timer file** for each; the public skill API does not expose profile identity. The old unscoped `timers.json` is kept untouched; choose it explicitly only if you intend to reuse it.
 
-Clock times use your PC's local timezone. “Noon” and “midnight” work. A clock time already passed today means tomorrow; an explicit past date is refused. The resolved time is repeated back. Repeating clock-time alarms use 24 hours; change_timer_settings can change that interval. They may drift with execution latency; daylight-saving/calendar recurrence is not implemented.
+Clock times use the timezone on the PC running Wingman. If you name another timezone, the skill uses that timezone for the request. “Noon” and “midnight” work. A clock time already passed in the selected timezone means tomorrow. The skill reports the resolved time and asks you to disambiguate a clock time that occurs twice when clocks change. Repeating clock-time alarms use a fixed 24-hour interval, so they can shift by an hour at a daylight-saving change.
 
 ## Diagnostics and limits
 
@@ -100,6 +102,6 @@ ruff check .
 python build.py --out /path/to/new/output-folder
 ```
 
-The deterministic ZIP contains only this skill, its README/license and a hash manifest. It contains no user timers, credentials, recordings, models or other project code. Tests mock Wingman and HTTP calls; they do not contact a provider.
+The ZIP includes the skill and the pinned [Python tzdata 2026.6 wheel](https://pypi.org/project/tzdata/2026.6/) for systems without IANA timezone data. It reads the bundled data directly, so users need no dependency install. The wheel includes its upstream license. Tests mock Wingman and HTTP calls.
 
 Based on the stock [Wingman Timer](https://github.com/ShipBit/wingman-ai/tree/main/skills/timer), under MIT. This optional module is independently maintained and does not modify Wingman Core.
