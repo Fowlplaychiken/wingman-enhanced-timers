@@ -11,12 +11,16 @@ import json
 import math
 import os
 import random
+import re
 import string
 import threading
 import time
 from contextvars import ContextVar
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, tzinfo
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
+from zipfile import ZipFile
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 
@@ -33,27 +37,65 @@ FILE_VERSION = 1
 USER_ONLY_TOOLS = {"confirm_timer", "run_missed_timer"}
 
 
-def parse_at_time(text: str, now: datetime) -> datetime:
-    """Resolve '20:00', '8:00 PM', '8 PM' or ISO 8601 to the next such local time."""
+def _time_zone(name: str) -> tzinfo:
+    if not isinstance(name, str):
+        raise ValueError("Timezone must be a name or UTC offset.")
+    name = name.strip()
+    if name == "UTC":
+        return timezone.utc
+    if re.fullmatch(r"[+-](?:[01][0-9]|2[0-3]):[0-5][0-9]", name):
+        return datetime.fromisoformat(f"2000-01-01T00:00{name}").tzinfo
+    if re.fullmatch(r"[A-Za-z0-9_+-]+(?:/[A-Za-z0-9_+-]+)+", name):
+        try:
+            return ZoneInfo(name)
+        except ZoneInfoNotFoundError:
+            try:
+                with ZipFile(Path(__file__).with_name("timezones.whl")) as wheel:
+                    with wheel.open(f"tzdata/zoneinfo/{name}") as data:
+                        return ZoneInfo.from_file(data, key=name)
+            except (OSError, KeyError, ValueError):
+                pass
+    raise ValueError("Unknown timezone. Use a name like America/Los_Angeles or an offset like +05:30.")
+
+
+def _wall_time(wall: datetime, zone: tzinfo | None) -> datetime:
+    # Round-trip through the clock to detect skipped or repeated wall times.
+    candidates = {}
+    for fold in (0, 1):
+        stamp = wall.replace(tzinfo=zone, fold=fold).timestamp()
+        converted = datetime.fromtimestamp(stamp, zone)
+        if converted.replace(tzinfo=None) == wall:
+            candidates[stamp] = converted if zone is not None else converted.astimezone()
+    if not candidates:
+        raise ValueError("That time is skipped by a clock change. Choose a different time.")
+    if len(candidates) > 1:
+        raise ValueError("That time occurs twice. Specify which UTC offset you mean.")
+    return next(iter(candidates.values()))
+
+
+def parse_at_time(text: str, now: datetime, *, system_local: bool = False) -> datetime:
+    """Resolve a clock time or ISO date against the supplied current time."""
     raw = (text or "").strip()
     if not raw:
         raise ValueError("empty time")
-    tz = now.tzinfo
+    zone = None if system_local else now.tzinfo
     raw = {"NOON": "12:00", "MIDNIGHT": "00:00"}.get(raw.upper(), raw)
     for fmt in ("%H:%M", "%H:%M:%S", "%I:%M %p", "%I:%M%p", "%I %p", "%I%p"):
         try:
             t = datetime.strptime(raw.upper().replace(".", ""), fmt).time()
         except ValueError:
             continue
-        due = now.replace(hour=t.hour, minute=t.minute, second=t.second, microsecond=0)
-        return due if due > now else due + timedelta(days=1)
+        wall = datetime.combine(now.date(), t)
+        if wall <= now.replace(tzinfo=None):
+            wall += timedelta(days=1)
+        return _wall_time(wall, zone)
     try:
         due = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         raise ValueError(f"Could not understand time '{text}'") from None
     if due.tzinfo is None:
-        due = due.replace(tzinfo=tz)
-    if due <= now:
+        due = _wall_time(due, zone)
+    if due.timestamp() <= now.timestamp():
         raise ValueError("That date and time is already in the past.")
     return due
 
@@ -127,7 +169,9 @@ class EnhancedTimers(Skill):
 
     async def get_prompt(self) -> str | None:
         prompt = await super().get_prompt()
-        return f"{prompt or ''}\n\nActive timers:\n{await self.get_timer_status()}"
+        return (f"{prompt or ''}\n\nUse get_current_time for the real-world current time. "
+                "Use at_time for clock-time reminders and pass the user's timezone when specified. "
+                f"Use returned timer times when confirming.\n\nActive timers:\n{await self.get_timer_status()}")
 
     async def start_timer_worker(self) -> None:
         with self._lock:
@@ -214,7 +258,10 @@ class EnhancedTimers(Skill):
         if notice:
             await self._say(notice)
         if missed:
-            names = "; ".join(f"{self._label(t)} (was due {self._plain(t['due'])})" for t in missed)
+            names = "; ".join(
+                f"{self._label(t)} (was due {self._plain(t['due'], t.get('time_zone'))})"
+                for t in missed
+            )
             await self._say(
                 f"{len(missed)} timer{'s' if len(missed) != 1 else ''} came due while Wingman was "
                 f"closed and did not run: {names}. Say run missed timer to run one, or cancel it."
@@ -229,12 +276,19 @@ class EnhancedTimers(Skill):
         else:
             await self.wingman.tts.speak(text, priority=SpeechPriority.EVENT)
 
-    def _plain(self, epoch: float) -> str:
-        dt = datetime.fromtimestamp(epoch).astimezone()
-        now = datetime.fromtimestamp(self.clock()).astimezone()
+    def _plain(self, epoch: float, zone_name: str | None = None) -> str:
+        zone = None
+        if zone_name:
+            try:
+                zone = _time_zone(zone_name)
+            except ValueError:
+                zone_name, zone = "UTC", timezone.utc
+        dt = datetime.fromtimestamp(epoch, zone).astimezone(zone)
+        now = datetime.fromtimestamp(self.clock(), zone).astimezone(zone)
         day = "today" if dt.date() == now.date() else (
             "tomorrow" if dt.date() == (now + timedelta(days=1)).date() else dt.strftime("%b %d"))
-        return f"{dt.strftime('%I:%M %p').lstrip('0')} {day}"
+        label = f"{dt.strftime('%I:%M %p').lstrip('0')} {day}"
+        return f"{label} ({zone_name}, UTC{dt.strftime('%z')})" if zone_name else label
 
     @staticmethod
     def _label(t: dict) -> str:
@@ -273,8 +327,22 @@ class EnhancedTimers(Skill):
                 return tid
 
     # ------------------------------------------------------------ tools
+    @tool(description="Get the current real-world date and time from this PC. Use the PC's local timezone unless the user specifies another.")
+    async def get_current_time(self, time_zone: Optional[str] = None) -> dict:
+        """Args:
+            time_zone: Optional IANA name such as America/Los_Angeles, UTC, or a UTC offset like +05:30.
+        """
+        try:
+            zone = _time_zone(time_zone) if time_zone is not None else None
+        except ValueError as error:
+            return {"error": str(error)}
+        now = datetime.fromtimestamp(self.clock(), zone).astimezone(zone)
+        return {"now": now.isoformat(timespec="seconds"),
+                "time_zone": now.tzname() if time_zone is None else time_zone.strip()}
+
     @tool(description="Set a timer to run an action after a delay (seconds) or at a clock time. "
-          "Give exactly one of delay or at_time ('20:00', '8:00 PM' or ISO 8601, local time). "
+          "Give exactly one of delay or at_time ('20:00', '8:00 PM' or ISO 8601). "
+          "Use at_time for clock times and pass time_zone only if the user specifies one. "
           "function_name is a tool or command name, 'remind_me' (arguments {\"message\": ...}) or "
           "'prompt' (arguments {\"request\": ...}) to run a stored request later. "
           "Supports loops. Use silent for quick loops.")
@@ -287,19 +355,27 @@ class EnhancedTimers(Skill):
         is_loop: bool = False,
         loop_counts: int = -1,
         silent: bool = False,
+        time_zone: Optional[str] = None,
     ) -> str:
         """
         Args:
             function_name: Tool/command to run, 'remind_me' or 'prompt'.
             function_arguments_json: Arguments as a JSON object.
             delay: Delay in seconds (use this or at_time).
-            at_time: Local clock time such as '20:00', '8:00 PM' or ISO 8601.
+            at_time: Clock time such as '20:00', '8:00 PM' or ISO 8601. Defaults to the PC's timezone.
             is_loop: Whether the timer repeats every delay seconds.
             loop_counts: Number of runs for a loop (-1 for infinite).
             silent: Whether to suppress spoken output.
+            time_zone: Optional IANA name such as America/Los_Angeles, UTC, or a UTC offset like +05:30.
         """
         if (delay is None) == (not at_time):
             return "Error: give exactly one of delay or at_time."
+        try:
+            zone = _time_zone(time_zone) if time_zone is not None else None
+        except ValueError as error:
+            return f"Error: {error}"
+        if time_zone is not None:
+            time_zone = time_zone.strip()
         if "." in function_name:
             function_name = function_name.split(".")[1]
         if function_name in USER_ONLY_TOOLS:
@@ -331,12 +407,18 @@ class EnhancedTimers(Skill):
         now = self.clock()
         if at_time:
             try:
-                due_dt = parse_at_time(at_time, datetime.fromtimestamp(now).astimezone())
-            except ValueError as e:
+                local_now = datetime.fromtimestamp(now, zone).astimezone(zone)
+                due_dt = parse_at_time(at_time, local_now, system_local=zone is None)
+                if zone is not None and due_dt.astimezone(zone).utcoffset() != due_dt.utcoffset():
+                    raise ValueError("The UTC offset does not match the requested timezone at that time.")
+                if not time_zone and re.search(r"(?:Z|[+-]\d\d:\d\d)$", at_time.strip()):
+                    offset = due_dt.strftime("%z")
+                    time_zone = f"{offset[:3]}:{offset[3:]}"
+            except (ValueError, OverflowError, OSError) as e:
                 return f"Error: {e}"
             due = due_dt.timestamp()
             interval = max(1, int(delay)) if delay else 86400
-            spoken = f"Set for {self._plain(due)}."
+            spoken = f"Set for {self._plain(due, time_zone)}."
         else:
             if not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay <= 0:
                 return "Error: Delay must be greater than 0."
@@ -348,13 +430,15 @@ class EnhancedTimers(Skill):
         timer = {"id": self._new_id(), "due": due, "interval": interval, "is_loop": bool(is_loop),
                  "loops": int(loop_counts), "silent": bool(silent), "action": action,
                  "created": now, "state": "pending"}
+        if time_zone:
+            timer["time_zone"] = time_zone
         with self._lock:
             if self._stopping:
                 return "Error: timers are unloading."
             for other in self.timers.values():
                 if (other["state"] == "pending" and other["action"] == action
                         and other["is_loop"] == bool(is_loop) and abs(other["due"] - due) < 60):
-                    return (f"Error: an identical timer is already set for {self._plain(other['due'])} "
+                    return (f"Error: an identical timer is already set for {self._plain(other['due'], other.get('time_zone'))} "
                             f"(id {other['id']}). Cancel it first if you want a new one.")
             self.timers[timer["id"]] = timer
             self._save()
@@ -372,10 +456,10 @@ class EnhancedTimers(Skill):
                    "is_loop": t["is_loop"],
                    "remaining_loops": (t["loops"] if t["loops"] > 0 else "infinite") if t["is_loop"] else "N/A"}
             if t["state"] == "pending":
-                row["due"] = self._plain(t["due"])
+                row["due"] = self._plain(t["due"], t.get("time_zone"))
                 row["remaining_time_in_seconds"] = max(0, int(t["due"] - now))
             elif t["state"] == "missed":
-                row["was_due"] = self._plain(t["due"])
+                row["was_due"] = self._plain(t["due"], t.get("time_zone"))
             elif t["state"] == "awaiting":
                 row["waiting_for"] = "the player to say confirm timer"
             elif t["state"] == "confirmed":

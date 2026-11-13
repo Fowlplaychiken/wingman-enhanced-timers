@@ -1,7 +1,7 @@
 module: skills.enhanced_timers.main
 name: EnhancedTimers
 api_version: 3
-version: 0.1.2
+version: 0.1.3
 display_name: Enhanced Timers
 author: Star Citizen Computer project
 description:
@@ -13,6 +13,7 @@ discovery_keywords:
 - timer
 - remind me
 - alarm
+- what time is it
 - at 8 PM
 - run missed timer
 - confirm timer
