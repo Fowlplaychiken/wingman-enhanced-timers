@@ -27,4 +27,5 @@ class _Skill:
 
 
 _mod("api"); _mod("api.enums", SpeechPriority=_Speech)
+_mod("api.interface", AudioFile=SimpleNamespace)
 _mod("skills"); _mod("skills.skill_base", Skill=_Skill, tool=lambda **k: (lambda f: f))

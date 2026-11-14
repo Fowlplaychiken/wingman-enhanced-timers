@@ -25,7 +25,10 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from api.enums import SpeechPriority
+from api.interface import AudioFile
 from skills.skill_base import Skill, tool
+
+from .alarm_sounds import SOUNDS
 
 if TYPE_CHECKING:
     from api.interface import SettingsConfig, SkillConfig
@@ -35,6 +38,20 @@ REMIND = "remind_me"
 PROMPT = "prompt"
 FILE_VERSION = 1
 USER_ONLY_TOOLS = {"confirm_timer", "run_missed_timer"}
+ALERT_PREFIX = "ALERT, ALERT. "
+SOUND_OPTIONS = ", ".join(("voice", *SOUNDS))
+
+
+def alarm_preferences(alert_sound: str | None, reason: str | None) -> tuple[str | None, str | None]:
+    if alert_sound is not None:
+        if not isinstance(alert_sound, str) or alert_sound.strip().lower() not in {"voice", *SOUNDS}:
+            raise ValueError(f"Choose an alert sound: {SOUND_OPTIONS}. For a quiet timer, ask for silent mode.")
+        alert_sound = alert_sound.strip().lower()
+    if reason is not None:
+        if not isinstance(reason, str) or len(reason.strip()) > 300:
+            raise ValueError("The alarm reason must be text of up to 300 characters.")
+        reason = reason.strip()
+    return alert_sound, reason
 
 
 def _time_zone(name: str) -> tzinfo:
@@ -171,6 +188,7 @@ class EnhancedTimers(Skill):
         prompt = await super().get_prompt()
         return (f"{prompt or ''}\n\nUse get_current_time for the real-world current time. "
                 "Use at_time for clock-time reminders and pass the user's timezone when specified. "
+                f"For alarm sounds, offer {SOUND_OPTIONS}. Use the preset only if requested. "
                 f"Use returned timer times when confirming.\n\nActive timers:\n{await self.get_timer_status()}")
 
     async def start_timer_worker(self) -> None:
@@ -276,6 +294,23 @@ class EnhancedTimers(Skill):
         else:
             await self.wingman.tts.speak(text, priority=SpeechPriority.EVENT)
 
+    async def _announce_alarm(self, timer: dict, text: str, *, cue: bool = True) -> None:
+        if cue and not timer["silent"]:
+            selected = timer.get("alert_sound", "voice")
+            if selected in SOUNDS:
+                file = Path(__file__).resolve().with_name("sounds") / f"{selected}.wav"
+                try:
+                    if not file.is_file():
+                        raise FileNotFoundError(file.name)
+                    await self.wingman.audio.play(AudioFile(path=str(file.parent), name=file.name), volume=0.65)
+                    await asyncio.sleep(SOUNDS[selected].duration)
+                except Exception as error:
+                    self.log.error(f"Timer sound '{selected}' unavailable: {error}", server_only=True)
+                    text = ALERT_PREFIX + text
+            else:
+                text = ALERT_PREFIX + text
+        await self._say(text)
+
     def _plain(self, epoch: float, zone_name: str | None = None) -> str:
         zone = None
         if zone_name:
@@ -293,7 +328,7 @@ class EnhancedTimers(Skill):
     @staticmethod
     def _label(t: dict) -> str:
         a = t["action"]
-        text = a.get("args", {}).get("message") or a.get("args", {}).get("request") or a["name"]
+        text = t.get("reason") or a["args"].get("message") or a["args"].get("request") or a["name"]
         return str(text)[:60]
 
     def _needs_confirm(self, t: dict) -> bool:
@@ -316,7 +351,7 @@ class EnhancedTimers(Skill):
             return any(w in n for w in self._confirm_words() for n in names)
         if any(w in n for w in self._confirm_words() for n in names):
             return True
-        safe_tools = str(self._prop("unconfirmed_tools", "get_weather", allow_empty=True))
+        safe_tools = str(self._prop("unconfirmed_tools", "", allow_empty=True))
         return a["name"] not in {n.strip() for n in safe_tools.split(",") if n.strip()}
 
     def _new_id(self) -> str:
@@ -345,7 +380,7 @@ class EnhancedTimers(Skill):
           "Use at_time for clock times and pass time_zone only if the user specifies one. "
           "function_name is a tool or command name, 'remind_me' (arguments {\"message\": ...}) or "
           "'prompt' (arguments {\"request\": ...}) to run a stored request later. "
-          "Supports loops. Use silent for quick loops.")
+          f"Supports loops. Optional alert_sound: {SOUND_OPTIONS}. Use silent to mute routine alerts.")
     async def set_timer(
         self,
         function_name: str,
@@ -356,6 +391,8 @@ class EnhancedTimers(Skill):
         loop_counts: int = -1,
         silent: bool = False,
         time_zone: Optional[str] = None,
+        alert_sound: Optional[str] = None,
+        reason: Optional[str] = None,
     ) -> str:
         """
         Args:
@@ -365,13 +402,16 @@ class EnhancedTimers(Skill):
             at_time: Clock time such as '20:00', '8:00 PM' or ISO 8601. Defaults to the PC's timezone.
             is_loop: Whether the timer repeats every delay seconds.
             loop_counts: Number of runs for a loop (-1 for infinite).
-            silent: Whether to suppress spoken output.
+            silent: Mute routine timer audio. Confirmation and failure notices still apply.
             time_zone: Optional IANA name such as America/Los_Angeles, UTC, or a UTC offset like +05:30.
+            alert_sound: Optional voice, chime, beeps or red-alert. Default is voice.
+            reason: Optional reason for the alarm or scheduled action, in the user's words.
         """
         if (delay is None) == (not at_time):
             return "Error: give exactly one of delay or at_time."
         try:
             zone = _time_zone(time_zone) if time_zone is not None else None
+            alert_sound, reason = alarm_preferences(alert_sound, reason)
         except ValueError as error:
             return f"Error: {error}"
         if time_zone is not None:
@@ -432,11 +472,16 @@ class EnhancedTimers(Skill):
                  "created": now, "state": "pending"}
         if time_zone:
             timer["time_zone"] = time_zone
+        if alert_sound is not None:
+            timer["alert_sound"] = alert_sound
+        if reason:
+            timer["reason"] = reason
         with self._lock:
             if self._stopping:
                 return "Error: timers are unloading."
             for other in self.timers.values():
                 if (other["state"] == "pending" and other["action"] == action
+                        and other.get("reason") == timer.get("reason")
                         and other["is_loop"] == bool(is_loop) and abs(other["due"] - due) < 60):
                     return (f"Error: an identical timer is already set for {self._plain(other['due'], other.get('time_zone'))} "
                             f"(id {other['id']}). Cancel it first if you want a new one.")
@@ -453,6 +498,7 @@ class EnhancedTimers(Skill):
             timers = [dict(t) for t in self.timers.values()]
         for t in timers:
             row = {"id": t["id"], "what": self._label(t), "state": t["state"],
+                   "alert_sound": "silent" if t["silent"] else t.get("alert_sound", "voice"),
                    "is_loop": t["is_loop"],
                    "remaining_loops": (t["loops"] if t["loops"] > 0 else "infinite") if t["is_loop"] else "N/A"}
             if t["state"] == "pending":
@@ -480,7 +526,7 @@ class EnhancedTimers(Skill):
             self._save()
         return f"Timer with id {id} cancelled.\n\n{await self.get_timer_status()}"
 
-    @tool(description="Change a timer's settings.")
+    @tool(description=f"Change a timer's settings, including its alert sound ({SOUND_OPTIONS}) or reason.")
     async def change_timer_settings(
         self,
         id: str,
@@ -488,6 +534,8 @@ class EnhancedTimers(Skill):
         is_loop: Optional[bool] = None,
         loops: Optional[int] = None,
         silent: Optional[bool] = None,
+        alert_sound: Optional[str] = None,
+        reason: Optional[str] = None,
     ) -> str:
         """
         Args:
@@ -496,7 +544,13 @@ class EnhancedTimers(Skill):
             is_loop: Whether the timer should loop.
             loops: Number of remaining loops (-1 for infinite).
             silent: Whether the timer should be silent.
+            alert_sound: Choose voice, chime, beeps or red-alert; omit to keep the current sound.
+            reason: New reason, or an empty string to remove it.
         """
+        try:
+            alert_sound, reason = alarm_preferences(alert_sound, reason)
+        except ValueError as error:
+            return f"Error: {error}"
         if delay is not None and (not isinstance(delay, (int, float)) or not math.isfinite(delay) or delay <= 0):
             return "Error: Delay must be greater than 0."
         if loops is not None and (type(loops) is not int or (loops != -1 and loops <= 0)):
@@ -515,6 +569,10 @@ class EnhancedTimers(Skill):
                 t["loops"] = loops
             if silent is not None:
                 t["silent"] = bool(silent)
+            if alert_sound is not None:
+                t["alert_sound"] = alert_sound
+            if reason is not None:
+                t["reason"] = reason
             self._save()
         return f"Timer with id '{id}' settings have been changed.\n\n{await self.get_timer_status()}"
 
@@ -594,6 +652,7 @@ class EnhancedTimers(Skill):
                 if t["state"] == "pending" and t["due"] <= now:
                     if self._needs_confirm(t):
                         t["state"] = "awaiting"
+                        t["notified"] = True
                         t["deadline"] = now + max(1, float(self._prop("confirm_window_seconds", 60)))
                         self._save()
                         announce = True
@@ -614,7 +673,7 @@ class EnhancedTimers(Skill):
                     continue
             if announce:
                 what = "run its stored request" if t["action"]["type"] == "prompt" else f"use {t['action']['name']}"
-                await self._say(f"Timer {self._label(t)} wants to {what}. Say confirm timer to do it.")
+                await self._announce_alarm(t, f"Timer {self._label(t)} wants to {what}. Say confirm timer to do it.")
             elif operation == "execute":
                 await self._execute(t, now)
             else:
@@ -627,6 +686,7 @@ class EnhancedTimers(Skill):
             t["due"] = now + t["interval"]
             t["state"] = "pending"
             t["announced"] = False
+            t.pop("notified", None)
             t.pop("deadline", None)
             if t["loops"] > 0:
                 t["loops"] -= 1
@@ -650,6 +710,8 @@ class EnhancedTimers(Skill):
                 return False
             a = dict(t["action"])
             silent = t["silent"]
+            cue = not t.get("notified", False)
+            notice = dict(t)
             due = t["due"]
             dry = (bool(self._prop("dry_run_key_presses", False))
                    and (a["type"] == "prompt" or (a["type"] == "tool" and self._needs_confirm(t))))
@@ -662,21 +724,32 @@ class EnhancedTimers(Skill):
                 await self._say(f"Dry run: would have {description} {self._label(t)}")
                 return True
             if a["type"] == "reminder":
-                msg = a["args"].get("message") or "This is your reminder, no message was given."
                 if not silent:
-                    await self._say(str(msg))
+                    message = a["args"].get("message") or notice.get("reason")
+                    text = "Your timer is up."
+                    if message:
+                        text += f" Reminder: {message}"
+                    if notice.get("reason") and notice["reason"] != message:
+                        text += f" Reason: {notice['reason']}"
+                    await self._announce_alarm(notice, text, cue=cue)
             elif a["type"] == "prompt":
-                await self._run_prompt(str(a["args"].get("request", "")), silent)
+                await self._run_prompt(str(a["args"].get("request", "")), notice, cue=cue)
             else:
                 result = await self.wingman.tools.invoke(a["name"], a["args"])
                 response = getattr(result, "instant_response", None) or getattr(result, "response", None)
-                if response and not silent:
-                    await self._say(await self._summarize(a, str(response)))
+                if not silent:
+                    outcome = (await self._summarize(a, str(response)) if response else
+                               f"{self._label(notice)} ran, but it returned no outcome.")
+                    if response and notice.get("reason"):
+                        outcome += f" Reason: {notice['reason']}"
+                    await self._announce_alarm(notice, outcome, cue=cue)
         except Exception as e:
             self.log.error(f"Timer action failed: {e}", server_only=True)
+            if a["type"] == "tool":
+                await self._announce_alarm(notice, f"Timer {self._label(notice)} could not verify the action outcome.", cue=cue)
         return True
 
-    async def _run_prompt(self, request: str, silent: bool) -> None:
+    async def _run_prompt(self, request: str, timer: dict, *, cue: bool) -> None:
         port = self._prop("core_api_port", 49111)
         if type(port) is not int or not 1 <= port <= 65535 or not request.strip():
             await self._say("Stored request was not submitted: set a valid Core API port and a nonempty request.")
@@ -696,8 +769,11 @@ class EnhancedTimers(Skill):
                 submitted = True  # any failure after this point may have reached Core
                 response = await client.post("/send-text-to-wingman", data={"text": request, "wingman_name": name})
                 response.raise_for_status()
-            if not silent:
-                await self._say("Stored request submitted to Wingman. Its assistant turn has not been verified complete.")
+            if not timer["silent"]:
+                text = "Stored request submitted to Wingman. Its assistant turn has not been verified complete."
+                if timer.get("reason"):
+                    text += f" Reason: {timer['reason']}"
+                await self._announce_alarm(timer, text, cue=cue)
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError):
             notice = ("Stored request outcome is unknown; it will not be retried automatically." if submitted else
                       "Stored request was not submitted: the configured Core API or Wingman profile is unavailable.")

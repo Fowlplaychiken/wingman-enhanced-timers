@@ -7,12 +7,17 @@ Voice alarms, reminders and scheduled assistant requests for Wingman AI. Timers 
 - “In ten minutes, remind me to check the refinery.”
 - “At 8 PM, remind me to leave.”
 - “At 8 PM Pacific time, remind me to join the crew.”
+- “Set a 20-minute alarm with the chime for dinner.”
+- “Change the dinner alarm to red alert.”
+- “Set a silent five-minute timer.”
 - “What time is it here?” / “What time is it in Tokyo?”
 - “Every fifteen minutes, remind me to check my fuel.”
 - “In five minutes, ask the assistant to give me a one-sentence preflight checklist.”
 - “List my timers.” / “Cancel the refinery timer.”
 
-A reminder speaks directly. A scheduled assistant request asks for confirmation when due, then waits for Wingman to finish the current answer before submitting the request. That assistant uses its normal model, tools and action controls. Submission does not mean its task succeeded.
+At expiry, Wingman says **“Alert, alert”** and announces the reminder and any reason you gave. Pick **chime**, **beeps**, or **red alert** to hear a short sound followed by the announcement. Say **voice** to restore the default, or ask for a **silent** timer to mute its routine audio. You can change the sound or reason after setting a timer. Confirmation and failure notices still speak.
+
+A scheduled tool reports its result. A scheduled assistant request asks for confirmation when due by default, then waits for Wingman to finish the current answer before submitting the request. The assistant answers through its normal conversation and tools.
 
 **Enhanced Timers works with ordinary Wingman.** Reminders, alarms and scheduled
 assistant replies need no other skill.
@@ -53,9 +58,9 @@ requires that skill's own test setup.
 ```mermaid
 flowchart TD
     Due[Timer becomes due] --> Kind{Reminder?}
-    Kind -- Yes --> Speak[Speak reminder]
+    Kind -- Yes --> Speak[Play chosen cue and announce reminder]
     Kind -- Action or request --> Need{Confirmation needed?}
-    Need -- Yes --> Ask[Ask you to confirm]
+    Need -- Yes --> Ask[Play chosen cue and ask you to confirm]
     Ask -- Confirmed --> Dry{Dry run applies?}
     Ask -- Not confirmed --> Skip[Skip and report]
     Need -- No --> Dry
@@ -75,7 +80,7 @@ flowchart TD
 | Setting | Default | Use |
 |---|---|---|
 | Timer file | automatic | Private JSON file scoped to your assistant name; optional explicit path. Keep private: it contains reminder/request text. |
-| Tools allowed without confirmation | See skill settings | Add exact names of harmless read-only tools already available to your assistant. A name in this list does not install a tool. Other tools and input commands ask first. |
+| Tools allowed without confirmation | empty | Add exact names of harmless read-only tools available to your assistant. Other tools and input commands ask first. |
 | Ask before stored requests | on | Confirmation before submitting a full assistant turn. |
 | Core API port | `49111` | Change only if your Wingman uses another local port. Fixed loopback only; no external server. |
 | Confirm window | 60 seconds | Time to confirm a due action. |
@@ -102,6 +107,6 @@ ruff check .
 python build.py --out /path/to/new/output-folder
 ```
 
-The ZIP includes the skill and the pinned [Python tzdata 2026.6 wheel](https://pypi.org/project/tzdata/2026.6/) for systems without IANA timezone data. It reads the bundled data directly, so users need no dependency install. The wheel includes its upstream license. Tests mock Wingman and HTTP calls.
+The ZIP includes three original synthesized WAVs and the pinned [Python tzdata 2026.6 wheel](https://pypi.org/project/tzdata/2026.6/) for systems without IANA timezone data. Tests mock Wingman and HTTP calls.
 
 Based on the stock [Wingman Timer](https://github.com/ShipBit/wingman-ai/tree/main/skills/timer), under MIT. This optional module is independently maintained and does not modify Wingman Core.
