@@ -1,11 +1,11 @@
 module: skills.enhanced_timers.main
 name: EnhancedTimers
 api_version: 3
-version: 0.1.3
+version: 0.1.4
 display_name: Enhanced Timers
 author: Star Citizen Computer project
 description:
-  en: Timers that survive a Wingman restart, accept clock times like "at 8 PM", and ask before pressing keys. Replaces the stock Timer skill; do not enable both.
+  en: Persistent alarms and reminders with optional sounds, clock times, and confirmation before input commands. Use instead of the stock Timer skill.
 tags:
 - Utility
 - Timer
@@ -36,7 +36,7 @@ custom_properties:
   name: Reviewed tools allowed without confirmation
   hint: Exact comma-separated tool names with harmless read-only effects. Other tools require confirmation. Input commands always require confirmation.
   property_type: string
-  value: get_weather
+  value: ''
   required: false
 - id: confirm_prompt_actions
   name: Ask before running stored requests

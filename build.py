@@ -7,6 +7,8 @@ import re
 import zipfile
 from pathlib import Path
 
+from enhanced_timers.alarm_sounds import SOUNDS, render_wav
+
 ROOT = Path(__file__).resolve().parent
 TZDATA_SHA256 = "0a10eec6e13ef16b627fabed9a5f2ba61a62b1c67f327305f4e7e412a70b4aec"
 
@@ -20,19 +22,27 @@ def build(destination: Path) -> dict:
     version = re.search(rb"(?m)^version: ([0-9]+\.[0-9]+\.[0-9]+)\r?$", config)
     if version is None:
         raise ValueError("Explicit skill version required")
+    version = version.group(1).decode("ascii")
+    module = "enhanced_timers_v" + version.replace(".", "_")
+    dependency = f"dependencies/{module}"
     timezones = (source / "timezones.whl").read_bytes()
     if hashlib.sha256(timezones).hexdigest() != TZDATA_SHA256:
         raise ValueError("Bundled tzdata differs from the pinned upstream wheel")
     members = {
         "default_config.yaml": config,
-        "main.py": (source / "main.py").read_bytes(),
+        "main.py": f'"""Entry point for Wingman’s standalone skill loader."""\n\n'
+                   f"from {module}.main import EnhancedTimers as EnhancedTimers\n".encode(),
         "__init__.py": (source / "__init__.py").read_bytes(),
         "README.md": (ROOT / "README.md").read_bytes(),
         "LICENSE": (ROOT / "LICENSE").read_bytes(),
-        "timezones.whl": timezones,
+        f"{dependency}/__init__.py": b"",
+        f"{dependency}/main.py": (source / "main.py").read_bytes(),
+        f"{dependency}/timezones.whl": timezones,
+        f"{dependency}/alarm_sounds.py": (source / "alarm_sounds.py").read_bytes(),
+        **{f"{dependency}/sounds/{name}.wav": render_wav(sound) for name, sound in SOUNDS.items()},
     }
     manifest = {
-        "version": version.group(1).decode("ascii"),
+        "version": version,
         "files": {name: hashlib.sha256(data).hexdigest() for name, data in members.items()},
     }
     members["manifest.json"] = (json.dumps(manifest, indent=2) + "\n").encode()

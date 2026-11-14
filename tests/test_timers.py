@@ -42,12 +42,15 @@ class Fake:
         self.tools = SimpleNamespace(has=lambda n: True, invoke=self._invoke)
         self.commands = SimpleNamespace(get=lambda n: None)
         self.tts = SimpleNamespace(speak=self._speak)
+        self.sounds = []
+        self.audio = SimpleNamespace(play=self._play)
         self.conversation = SimpleNamespace(add_assistant=self._noop, user_busy=False)
         self.ai = SimpleNamespace(generate=self._noop)
         self.language = SimpleNamespace(name="English")
 
     async def _noop(self, *a, **k): return None
     async def _speak(self, text, priority=None): self.spoken.append(text)
+    async def _play(self, file, volume): self.sounds.append((file.name, volume))
 
     async def _invoke(self, name, args):
         self.invoked.append((name, args))
@@ -77,7 +80,7 @@ def test_one_shot_fires_once(tmp_path):
         await s.tick(); assert s.wingman.spoken == []
         c[0] += 10; await s.tick(); await s.tick()
         c[0] += 100; await s.tick()
-        assert s.wingman.spoken == ["tea"] and s.timers == {}
+        assert s.wingman.spoken == ["ALERT, ALERT. Your timer is up. Reminder: tea"] and s.timers == {}
     run(go())
 
 
@@ -87,7 +90,7 @@ def test_three_repeats_fire_exactly_three_times(tmp_path):
         await s.set_timer("remind_me", '{"message": "x"}', delay=5, is_loop=True, loop_counts=3)
         for _ in range(10):
             c[0] += 5; await s.tick()
-        assert s.wingman.spoken == ["x"] * 3 and s.timers == {}
+        assert s.wingman.spoken == ["ALERT, ALERT. Your timer is up. Reminder: x"] * 3 and s.timers == {}
     run(go())
 
 
@@ -110,7 +113,7 @@ def test_restart_resumes_future_timer(tmp_path):
         await s2.load_and_announce()
         assert s2.wingman.spoken == []          # nothing missed
         c[0] += 50; await s2.tick()
-        assert s2.wingman.spoken == ["later"]
+        assert s2.wingman.spoken == ["ALERT, ALERT. Your timer is up. Reminder: later"]
     run(go())
 
 
@@ -174,7 +177,7 @@ def test_late_confirm_is_refused(tmp_path):
 
 def test_non_input_tool_runs_without_asking(tmp_path):
     async def go():
-        c = [T0]; s = make(tmp_path, c)
+        c = [T0]; s = make(tmp_path, c, unconfirmed_tools="get_weather")
         await s.set_timer("get_weather", "{}", delay=5, silent=True)
         c[0] += 5; await s.tick()
         assert s.wingman.invoked == [("get_weather", {})]
@@ -273,7 +276,7 @@ def test_current_clock_and_timer_use_requested_timezone(tmp_path):
         assert (await restored.get_timer_status())[0]["remaining_time_in_seconds"] == 7200
         clock[0] += 7200
         await restored.tick()
-        assert restored.wingman.spoken == ["crew"]
+        assert restored.wingman.spoken == ["ALERT, ALERT. Your timer is up. Reminder: crew"]
     run(go())
 
 
@@ -346,7 +349,7 @@ def test_dry_run_does_not_dispatch_prompt_timers(tmp_path, core_api):
 
 def test_dry_run_leaves_non_key_tools_running(tmp_path):
     async def go():
-        c = [T0]; s = make(tmp_path, c, dry_run_key_presses=True)
+        c = [T0]; s = make(tmp_path, c, dry_run_key_presses=True, unconfirmed_tools="get_weather")
         await s.set_timer("get_weather", "{}", delay=5, silent=True)
         c[0] += 5; await s.tick()
         assert s.wingman.invoked == [("get_weather", {})] and s.dry_run_log == []
@@ -375,7 +378,7 @@ def test_cancel_due_timer_while_another_speaks(tmp_path):
         c = [T0]; s = make(tmp_path, c)
         entered, release = asyncio.Event(), asyncio.Event()
         async def speak(text, priority=None):
-            if text == "first":
+            if text.endswith("Reminder: first"):
                 entered.set(); await release.wait()
             s.wingman.spoken.append(text)
         s.wingman.tts.speak = speak
@@ -386,6 +389,53 @@ def test_cancel_due_timer_while_another_speaks(tmp_path):
         ticking = asyncio.create_task(s.tick())
         await entered.wait(); await s.cancel_timer(second); release.set(); await ticking
         assert s.wingman.invoked == []
+    run(go())
+
+
+def test_changed_alarm_cue_persists_and_plays_once_before_speech(tmp_path, monkeypatch):
+    from enhanced_timers import main
+
+    monkeypatch.setattr(main.Path, "is_file", lambda self: self.name.endswith(".wav"))
+
+    async def go():
+        clock = [T0]
+        first = make(tmp_path, clock)
+        assert (await first.set_timer("remind_me", delay=5, alert_sound="fake.wav")).startswith("Error")
+        await first.set_timer("remind_me", delay=5, reason="Check the refinery", alert_sound="chime")
+        timer_id = next(iter(first.timers))
+        await first.change_timer_settings(timer_id, alert_sound=" BEEPS ")
+        second = make(tmp_path, clock)
+        await second.load_and_announce()
+        assert (await second.get_timer_status())[0]["alert_sound"] == "beeps"
+        events = []
+
+        async def play(file, volume):
+            events.append(file.name)
+
+        async def speak(text, priority=None):
+            events.append(text)
+
+        second.wingman.audio.play = play
+        second.wingman.tts.speak = speak
+        clock[0] += 5
+        await second.tick()
+        await second.tick()
+        assert events == ["beeps.wav", "Your timer is up. Reminder: Check the refinery"]
+
+    run(go())
+
+
+def test_silent_alarm_and_unavailable_audio(tmp_path):
+    async def go():
+        clock = [T0]
+        timer = make(tmp_path, clock)
+        await timer.set_timer("remind_me", delay=5, reason="Quiet", alert_sound="chime", silent=True)
+        await timer.set_timer("remind_me", delay=5, reason="Audible", alert_sound="red-alert")
+        clock[0] += 5
+        await timer.tick()
+        assert timer.wingman.spoken == ["ALERT, ALERT. Your timer is up. Reminder: Audible"]
+        assert timer.wingman.sounds == []
+
     run(go())
 
 
@@ -450,7 +500,7 @@ def test_unload_cancels_inflight_worker_speech_without_replaying(tmp_path):
 
 def test_unknown_tool_requires_confirmation_but_reviewed_read_tool_does_not(tmp_path):
     async def go():
-        c = [T0]; s = make(tmp_path, c)
+        c = [T0]; s = make(tmp_path, c, unconfirmed_tools="get_weather")
         await s.set_timer("engage", delay=5)
         await s.set_timer("get_weather", delay=5)
         c[0] += 5; await s.tick()
@@ -484,12 +534,12 @@ def test_prompt_wrong_profile_and_invalid_port_never_post(tmp_path, core_api):
     async def go():
         core_api["missing"] = True
         s = make(tmp_path, [T0])
-        await s._run_prompt("check fuel", False)
+        await s._run_prompt("check fuel", {"silent": False}, cue=True)
         assert "was not submitted" in s.wingman.spoken[-1]
         assert not any(r.method == "POST" for r in core_api["calls"])
         core_api["calls"].clear()
         s = make(tmp_path, [T0], core_api_port="http://elsewhere")
-        await s._run_prompt("check fuel", False)
+        await s._run_prompt("check fuel", {"silent": False}, cue=True)
         assert core_api["calls"] == []
     run(go())
 
@@ -541,7 +591,7 @@ def test_enabled_skill_starts_saved_timer_at_startup_without_tool_invocation(tmp
             assert restored.active
             c[0] += 5
             assert await asyncio.to_thread(spoken.wait, 2)
-            assert w.spoken == ["restored"]
+            assert w.spoken == ["ALERT, ALERT. Your timer is up. Reminder: restored"]
         finally:
             await restored.unload()
     run(go())
@@ -674,7 +724,7 @@ async def verify():
     clock[0] = start + 60
     await timer.tick()
     await timer.tick()
-    assert timer.wingman.spoken == ["Check the refinery"]
+    assert timer.wingman.spoken == ["ALERT, ALERT. Your timer is up. Reminder: Check the refinery"]
     assert timer.wingman.invoked == []
     assert await timer.get_timer_status() == []
 
