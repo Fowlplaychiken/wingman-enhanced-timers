@@ -1,6 +1,17 @@
 # Wingman Enhanced Timers
 
-Voice alarms, reminders and scheduled assistant requests for Wingman AI. Timers survive a Wingman restart. No Wingman Core changes or separate service.
+Reminders that survive a Wingman restart, spoken alarms, and scheduled assistant requests, all inside ordinary Wingman. No Core changes or separate service.
+
+**[Download Enhanced Timers](https://github.com/Fowlplaychiken/wingman-enhanced-timers/releases/latest)**
+
+## Get started
+
+1. Download the skill ZIP from [Releases](https://github.com/Fowlplaychiken/wingman-enhanced-timers/releases).
+2. Fully quit Wingman. Extract the `enhanced_timers` folder into `%APPDATA%\ShipBit\WingmanAI\custom_skills`.
+3. Reopen Wingman. For your assistant, disable the stock **Timer** and enable **Enhanced Timers**. Use only one; they share tool names.
+4. Try **“In ten minutes, remind me to check the refinery.”** Then ask **“List my timers.”**
+
+Requires Wingman AI 3.2.14 or later and its public v3 skills API. Existing stock timers cannot be imported because stock Wingman keeps them only in memory; finish or cancel those before switching. Keep the previous skill version for rollback.
 
 ## What you can say
 
@@ -15,7 +26,7 @@ Voice alarms, reminders and scheduled assistant requests for Wingman AI. Timers 
 - “In five minutes, ask the assistant to give me a one-sentence preflight checklist.”
 - “List my timers.” / “Cancel the refinery timer.”
 
-At expiry, Wingman says **“Alert, alert”** and announces the reminder and any reason you gave. Pick **chime**, **beeps**, or **red alert** to hear a short sound followed by the announcement. Say **voice** to restore the default, or ask for a **silent** timer to mute its routine audio. You can change the sound or reason after setting a timer. Confirmation and failure notices still speak.
+At expiry, Wingman says **“Alert, alert”** and announces your reminder and reason. Choose **chime**, **beeps**, or **red alert** for a short cue, **voice** for the default, or **silent** to mute routine audio. You can change a timer's sound or reason later; confirmation and failure notices still speak.
 
 A scheduled tool reports its result. A scheduled assistant request asks for confirmation when due by default, then waits for Wingman to finish the current answer before submitting the request. The assistant answers through its normal conversation and tools.
 
@@ -28,17 +39,6 @@ This reports the latest readings Wilma already has. A timed quantum-fuel check
 requires a tool that can read current fuel.
 
 Timers missed while Wingman was closed are announced and listed; they never run silently on startup. Ask to run or cancel one.
-
-## Install
-
-Requires Wingman AI 3.2.14 or later and its public v3 skills API. Wingman already supplies the `httpx` dependency used for its local API.
-
-1. Download the skill ZIP from [Releases](https://github.com/Fowlplaychiken/wingman-enhanced-timers/releases).
-2. Fully quit Wingman. Extract the `enhanced_timers` folder into `%APPDATA%\ShipBit\WingmanAI\custom_skills`.
-3. Reopen Wingman. For your chosen assistant, disable the stock **Timer** and enable **Enhanced Timers**. Use only one: they share timer tool names.
-4. Try a short reminder, then ask to list your timers.
-
-Existing stock timers cannot be imported because stock Wingman holds them only in memory. Finish or cancel those before switching. Keep the prior skill version for rollback.
 
 ## When a timer acts
 
@@ -94,19 +94,5 @@ Clock times use the timezone on the PC running Wingman. If you name another time
 ## Diagnostics and limits
 
 Ask to list timers to see pending, missed, awaiting-confirmation and confirmed-but-waiting states. Errors go to Wingman's skill log. Corrupt or unsupported timer data is retained as a `.bad` file and reported; no actions are inferred from it. Scheduled requests use the original local Core API, check the active profile, and are submitted once. A timeout after submission is reported as unknown and is not retried.
-
-Offline tests cover persistence across separate Python processes, cancellation, confirmation, dry runs, worker shutdown and local API submission. In Wingman, a confirmed scheduled assistant request completed. A pending reminder survived a profile reload, and a separate text-created reminder survived a full app restart and fired once when due. Microphone input and gameplay were outside these checks.
-
-## Development
-
-Python 3.11 or later. Install test dependencies in your development environment, then run:
-
-```sh
-python -m pytest -q
-ruff check .
-python build.py --out /path/to/new/output-folder
-```
-
-The ZIP includes three original synthesized WAVs and the pinned [Python tzdata 2026.6 wheel](https://pypi.org/project/tzdata/2026.6/) for systems without IANA timezone data. Tests mock Wingman and HTTP calls.
 
 Based on the stock [Wingman Timer](https://github.com/ShipBit/wingman-ai/tree/main/skills/timer), under MIT. This optional module is independently maintained and does not modify Wingman Core.
